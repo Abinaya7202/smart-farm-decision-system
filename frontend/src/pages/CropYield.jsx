@@ -1,7 +1,8 @@
+const BASE_URL = import.meta.env.VITE_API_URL;
+
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 
-const BACKEND_URL = "http://localhost:5000";
 
 /* =========================
    ALL INDIAN STATES
@@ -55,7 +56,7 @@ const CropYield = () => {
       return;
     }
 
-    axios.get(`${BACKEND_URL}/map/crops/${state}`)
+   axios.get(`${BASE_URL}map/crops/${state}`)
       .then(res => setCrops(res.data || []))
       .catch(() => setCrops([]));
   }, [state]);
@@ -70,7 +71,7 @@ const CropYield = () => {
     }
 
     try {
-      const res = await axios.post(`${BACKEND_URL}/ml/predict-yield`, {
+      const res = await axios.post(`${BASE_URL}ml/predict-yield`, {
         state,
         crop,
         soil_type: soilType,
@@ -121,7 +122,7 @@ const CropYield = () => {
   }
 
   try {
-    const res = await axios.post(`${BACKEND_URL}/ml/predict-price`, {
+    const res = await axios.post(`${BASE_URL}ml/predict-price`, {
       state,
       crop,
       season,
@@ -142,7 +143,7 @@ const checkPestRisk = async () => {
   }
 
   try {
-    const res = await axios.post("http://127.0.0.1:8000/pest-risk", {
+    const res = await axios.post(`${BASE_URL}ml/pest-risk`, {
       state,
       crop,
       season,

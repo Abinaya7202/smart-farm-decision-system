@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 export const AuthContext = createContext();
 
 const AuthProvider = ({ children }) => {
-  const backendURL = "http://localhost:5000";
+  const BASE_URL = import.meta.env.VITE_API_URL; // 👈 correct API base URL
   const navigate = useNavigate();
 
   // ================= USER REGISTER =================
@@ -30,19 +30,17 @@ const AuthProvider = ({ children }) => {
   const registerUser = async (e, switchToLogin) => {
     e.preventDefault();
     try {
-      await axios.post(`${backendURL}/user/register`, {
+      await axios.post(`${BASE_URL}user/register`, {
         username,
         email,
         password
       });
 
       alert("User registered successfully");
-
       setUsername("");
       setEmail("");
       setPassword("");
 
-      // move to login after registration
       if (switchToLogin) switchToLogin();
     } catch (error) {
       alert(error.response?.data?.message || "Registration failed");
@@ -53,7 +51,7 @@ const AuthProvider = ({ children }) => {
   const loginUser = async (e) => {
     e.preventDefault();
     try {
-      const res = await axios.post(`${backendURL}/user/login`, {
+      const res = await axios.post(`${BASE_URL}user/login`, {
         username: loginUsername,
         password: loginPassword
       });
@@ -69,7 +67,6 @@ const AuthProvider = ({ children }) => {
       setLoginUsername("");
       setLoginPassword("");
 
-      // ✅ redirect user to home
       navigate("/home");
     } catch (error) {
       alert(error.response?.data?.message || "Invalid username or password");
@@ -80,17 +77,15 @@ const AuthProvider = ({ children }) => {
   const loginAdmin = async (e) => {
     e.preventDefault();
     try {
-      await axios.post(`${backendURL}/admin/login`, {
+      await axios.post(`${BASE_URL}admin/login`, {
         email: adminEmail,
         password: adminPassword
       });
 
       alert("Admin login successful");
-
       setAdminEmail("");
       setAdminPassword("");
 
-      // ✅ redirect admin to dashboard
       navigate("/admin-dashboard");
     } catch (error) {
       alert(error.response?.data?.message || "Invalid admin credentials");
@@ -107,30 +102,18 @@ const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider
       value={{
-        // register
-        username,
-        setUsername,
-        email,
-        setEmail,
-        password,
-        setPassword,
+        username, setUsername,
+        email, setEmail,
+        password, setPassword,
 
-        // user login
-        loginUsername,
-        setLoginUsername,
-        loginPassword,
-        setLoginPassword,
+        loginUsername, setLoginUsername,
+        loginPassword, setLoginPassword,
 
-        // admin login
-        adminEmail,
-        setAdminEmail,
-        adminPassword,
-        setAdminPassword,
+        adminEmail, setAdminEmail,
+        adminPassword, setAdminPassword,
 
-        // logged user
         loggedUser,
 
-        // functions
         registerUser,
         loginUser,
         loginAdmin,

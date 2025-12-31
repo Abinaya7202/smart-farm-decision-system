@@ -1,3 +1,5 @@
+const BASE_URL = import.meta.env.VITE_API_URL;
+
 import React, { useState, useContext } from "react";
 import { AuthContext } from "../context/AuthContext";
 
