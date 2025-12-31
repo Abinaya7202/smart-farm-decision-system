@@ -186,3 +186,6 @@ def pest_risk(data: PestInput):
         "pest_index_used": round(pest_index, 2),
         "message": f"Pest risk is {risk} for {data.crop} in {data.state} during {data.season}."
     }
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
