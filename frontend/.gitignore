@@ -1,0 +1,17 @@
+# Node modules
+backend/node_modules/
+frontend/node_modules/
+
+# Environment files
+backend/.env
+frontend/.env
+
+# Python virtual env
+ml_service/venv/
+
+# Model binaries
+ml_service/*.pkl
+
+# OS files
+.DS_Store
+Thumbs.db
