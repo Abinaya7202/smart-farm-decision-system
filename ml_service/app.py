@@ -3,14 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import joblib
-import gdown
+import urllib.request
 import os
 
 app = FastAPI()
 
-# ==================================================
-# CORS
-# ==================================================
+# ----- CORS -----
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,10 +17,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==================================================
-# 📌 Google Drive File IDs (your models)
-# ==================================================
-MODEL_FILES = {
+# ----- Google Drive Direct Download Base -----
+DRIVE_BASE = "https://drive.google.com/uc?export=download&id="
+
+# ----- Model File IDs -----
+MODEL_IDS = {
     "crop_model.pkl": "1AQV3pitp34I1U2d2NUtEASyAbnga5hyb",
     "crop_price_model.pkl": "15sYYLxGv4dsO5c-TI3HEG6xjcA7Yx7FA",
     "pest_cluster_model.pkl": "1773cjoJmsJdcaG4_mPPcetEEgJCuqMfP",
@@ -30,32 +29,25 @@ MODEL_FILES = {
     "risk_scaler.pkl": "1vf6Tiqwc4g5ljkhKvkm8Y7jhoR9er3vQ"
 }
 
-# Hold loaded models in memory
-models_cache = {}
+loaded_models = {}
 
-# ==================================================
-# 📌 Lazy Model Loader
-# ==================================================
-def get_model(filename):
-    file_id = MODEL_FILES[filename]
+# ----- Download & Load on Demand -----
+def get_model(name):
+    if name not in loaded_models:
+        file_id = MODEL_IDS[name]
+        url = DRIVE_BASE + file_id
 
-    # Download if not available locally
-    if not os.path.exists(filename):
-        print(f"📥 Downloading {filename}...")
-        url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        gdown.download(url, filename, quiet=False)
+        if not os.path.exists(name):  # download only if missing
+            print(f"📥 Downloading {name}...")
+            urllib.request.urlretrieve(url, name)
 
-    # Cache in memory
-    if filename not in models_cache:
-        print(f"🔄 Loading {filename} into memory...")
-        models_cache[filename] = joblib.load(filename)
+        loaded_models[name] = joblib.load(name)
+        print(f"✅ Loaded: {name}")
 
-    return models_cache[filename]
+    return loaded_models[name]
 
 
-# ==================================================
-# 📌 Request Schemas
-# ==================================================
+# ----- Input Schemas -----
 class PredictInput(BaseModel):
     area: float
     rainfall: float
@@ -79,68 +71,49 @@ class PestInput(BaseModel):
     rainfall: float
 
 
-# ==================================================
-# 🌾 1️⃣ Crop Yield Prediction
-# ==================================================
+# ----- ENDPOINTS -----
+
 @app.post("/predict")
 def predict(data: PredictInput):
     model = get_model("crop_model.pkl")
 
-    df = pd.DataFrame([{
-        "Area": data.area,
-        "Annual_Rainfall": data.rainfall,
-        "Fertilizer": data.fertilizer,
-        "Pesticide": data.pesticide,
-        "Crop": data.crop,
-        "State": data.state,
-        "Soil_type": data.soil_type,
-        "Season": data.season
-    }])
+    df = pd.DataFrame([data.dict()])
+    df.columns = ["Area", "Annual_Rainfall", "Fertilizer", "Pesticide", "Crop", "State", "Soil_type", "Season"]
 
-    pred = model.predict(df)[0]
+    result = model.predict(df)[0]
+
     return {
-        "predicted_yield": round(float(pred), 2),
-        "total_production": round(float(pred * data.area), 2)
+        "predicted_yield": float(result),
+        "estimated_total_production": float(result * data.area)
     }
 
 
-# ==================================================
-# 💰 2️⃣ Price Prediction
-# ==================================================
 @app.post("/predict-price")
 def predict_price(data: PriceInput):
     model = get_model("crop_price_model.pkl")
 
-    df = pd.DataFrame([{
-        "State": data.state,
-        "Crop Type": data.crop,
-        "Season": data.season,
-        "Rainfall (mm)": data.rainfall
-    }])
+    df = pd.DataFrame([data.dict()])
+    df.columns = ["State", "Crop Type", "Season", "Rainfall (mm)"]
 
     price = model.predict(df)[0]
+
     return {
-        "predicted_price": round(float(price), 2),
-        "unit": "₹ per ton",
-        "message": "Based on historical price trends."
+        "predicted_price": float(price),
+        "unit": "₹ per ton"
     }
 
 
-# ==================================================
-# 🐛 3️⃣ Pest Risk Detection
-# ==================================================
 @app.post("/pest-risk")
 def pest_risk(data: PestInput):
     scaler = get_model("risk_scaler.pkl")
     model = get_model("pest_risk_model.pkl")
 
-    temp_map = {"Kharif": 32, "Rabi": 22, "Zaid": 38}
-    temp = temp_map.get(data.season, 30)
+    season_temp = {"Kharif": 32, "Rabi": 22, "Zaid": 38}
+    temp = season_temp.get(data.season, 30)
 
-    base = 0.5
-    if temp >= 35: base += 0.2
-    if data.rainfall < 300: base += 0.2
-    if data.crop in ["Cotton", "Brinjal", "Chilli", "Tomato"]: base += 0.1
+    base = 0.5 + (0.2 if temp >= 35 else 0) + (0.2 if data.rainfall < 300 else 0)
+    if data.crop in ["Cotton", "Brinjal", "Chilli", "Tomato"]:
+        base += 0.1
 
     scaled = scaler.transform([[base]])[0][0]
 
@@ -154,26 +127,19 @@ def pest_risk(data: PestInput):
     }])
 
     risk = model.predict(df)[0]
-    labels = {"Low": "🟢 Low", "Medium": "🟡 Medium", "High": "🔴 High"}
 
     return {
-        "risk_level": labels[risk],
-        "temperature_used": temp,
-        "scaled_index": round(float(scaled), 2)
+        "risk_label": {"Low":"🟢 Low", "Medium":"🟡 Medium", "High":"🔴 High"}[risk],
+        "category": risk,
+        "pest_index_scaled": float(scaled),
     }
 
 
-# ==================================================
-# 🚦 Health Check
-# ==================================================
 @app.get("/")
 def home():
-    return {"message": "🚀 API is running with Google Drive ML models!"}
+    return {"message": "🚀 API Running with Google Drive Models!"}
 
 
-# ==================================================
-# LOCAL RUN
-# ==================================================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
