@@ -20,28 +20,23 @@ app.add_middleware(
 )
 
 # ==================================================
-# 📌 GitHub Release Model Loader
+# 📌 GitHub Release Model Loader (Lazy Loading)
 # ==================================================
 BASE_URL = "https://github.com/Abinaya7202/smart-farm-decision-system/releases/download/v1.0/"
 
-def load_model(filename):
-    url = BASE_URL + filename
-    local_file = filename
+models = {}
 
-    if not os.path.exists(local_file):
-        print(f"📥 Downloading {filename} ...")
-        urllib.request.urlretrieve(url, local_file)
+def get_model(filename):
+    """Lazy download + load"""
+    if filename not in models:
+        url = BASE_URL + filename
+        if not os.path.exists(filename):
+            print(f"📥 Downloading {filename} ...")
+            urllib.request.urlretrieve(url, filename)
+        print(f"✅ Loading {filename}")
+        models[filename] = joblib.load(filename)
+    return models[filename]
 
-    print(f"✅ Loaded {filename}")
-    return joblib.load(local_file)
-
-# 📌 Load all models on startup
-yield_model           = load_model("crop_model.pkl")
-recommend_model       = load_model("crop_recommend_model.pkl")
-price_model           = load_model("crop_price_model.pkl")
-pest_model            = load_model("pest_risk_model.pkl")
-cluster_model         = load_model("pest_cluster_model.pkl")   # ⭐ ADDED
-risk_scaler           = load_model("risk_scaler.pkl")          # ⭐ ADDED
 
 # ==================================================
 # 📌 Request Body Schemas
@@ -56,13 +51,6 @@ class PredictInput(BaseModel):
     soil_type: str
     season: str
 
-class RecommendInput(BaseModel):
-    crop: str
-    state: str
-    soil_type: str
-    rainfall: float
-    season: str
-
 class PriceInput(BaseModel):
     state: str
     crop: str
@@ -75,12 +63,15 @@ class PestInput(BaseModel):
     season: str
     rainfall: float
 
+
 # ==================================================
-# 🔥 MODULE 1: Yield Prediction
+# 🌾 MODULE 1: Crop Yield Prediction
 # ==================================================
 @app.post("/predict")
 def predict(data: PredictInput):
-    input_df = pd.DataFrame([{
+    yield_model = get_model("crop_model.pkl")
+
+    df = pd.DataFrame([{
         "Area": data.area,
         "Annual_Rainfall": data.rainfall,
         "Fertilizer": data.fertilizer,
@@ -91,49 +82,20 @@ def predict(data: PredictInput):
         "Season": data.season
     }])
 
-    prediction = yield_model.predict(input_df)[0]
+    prediction = yield_model.predict(df)[0]
     return {
         "predicted_yield": round(float(prediction), 2),
         "total_production": round(float(prediction * data.area), 2)
     }
 
-# ==================================================
-# 🔥 MODULE 2: Crop Recommendation
-# ==================================================
-@app.post("/recommend")
-def recommend(data: RecommendInput):
-    input_df = pd.DataFrame([{
-        "State": data.state,
-        "Soil_type": data.soil_type,
-        "Annual_Rainfall": data.rainfall,
-        "Season": data.season
-    }])
-
-    probabilities = recommend_model.predict_proba(input_df)[0]
-    crops = recommend_model.classes_
-    prob_map = dict(zip(crops, probabilities))
-    ranked = sorted(prob_map.items(), key=lambda x: x[1], reverse=True)
-
-    best_crop, best_conf = ranked[0]
-    selected_conf = prob_map.get(data.crop, 0)
-
-    return {
-        "selected_crop": data.crop,
-        "selected_crop_confidence": round(selected_conf * 100, 2),
-        "best_crop_suggestion": best_crop,
-        "best_crop_confidence": round(best_conf * 100, 2),
-        "ranking": [{"crop": c, "confidence": round(p * 100, 2)} for c, p in ranked[:5]],
-        "ai_decision":
-            f"✔ {data.crop} is suitable." if selected_conf >= best_conf * 0.75 else
-            f"⚠ {data.crop} is moderately suitable." if selected_conf >= 0.25 else
-            f"❌ Low suitability. Try **{best_crop}**."
-    }
 
 # ==================================================
-# 🔥 MODULE 3: Price Prediction
+# 💰 MODULE 2: Price Prediction
 # ==================================================
 @app.post("/predict-price")
 def predict_price(data: PriceInput):
+    model = get_model("crop_price_model.pkl")
+
     df = pd.DataFrame([{
         "State": data.state,
         "Crop Type": data.crop,
@@ -141,33 +103,37 @@ def predict_price(data: PriceInput):
         "Rainfall (mm)": data.rainfall
     }])
 
-    price = price_model.predict(df)[0]
+    price = model.predict(df)[0]
     return {
         "predicted_price": round(float(price), 2),
         "unit": "₹ per ton"
     }
 
+
 # ==================================================
-# 🔥 MODULE 4: Pest Risk Assessment
+# 🐛 MODULE 3: Pest Risk Detection
 # ==================================================
 @app.post("/pest-risk")
 def pest_risk(data: PestInput):
+    scaler = get_model("risk_scaler.pkl")
+    pest_model = get_model("pest_risk_model.pkl")
+
     season_temp = {"Kharif": 32, "Rabi": 22, "Zaid": 38}
     temp = season_temp.get(data.season, 30)
 
-    base_index = 0.5
-    if temp >= 35: base_index += 0.2
-    if data.rainfall < 300: base_index += 0.2
-    if data.crop in ["Cotton","Brinjal","Chilli","Tomato"]: base_index += 0.1
+    base = 0.5 + (0.2 if temp >= 35 else 0) + (0.2 if data.rainfall < 300 else 0)
+    if data.crop in ["Cotton", "Brinjal", "Chilli", "Tomato"]:
+        base += 0.1
 
-    pest_index = risk_scaler.transform([[base_index]])[0][0]  # ⭐ Using scaler
+    scaled = scaler.transform([[base]])[0][0]
+
     df = pd.DataFrame([{
         "State": data.state,
         "Crop Type": data.crop,
         "Season": data.season,
         "Temperature (°C)": temp,
         "Rainfall (mm)": data.rainfall,
-        "Auto_Pest_Index": pest_index
+        "Auto_Pest_Index": scaled
     }])
 
     risk = pest_model.predict(df)[0]
@@ -177,11 +143,20 @@ def pest_risk(data: PestInput):
         "ai_label": label,
         "pest_risk": risk,
         "temperature_used": temp,
-        "scaled_pest_index": round(float(pest_index), 2)
+        "scaled_index": round(float(scaled), 2)
     }
 
+
 # ==================================================
-# 🚀 Run Server (Local Only)
+# 🚦 Health Check Endpoint (Optional)
+# ==================================================
+@app.get("/")
+def home():
+    return {"message": "🚀 API running successfully!"}
+
+
+# ==================================================
+# 🚀 Run Server (Local)
 # ==================================================
 if __name__ == "__main__":
     import uvicorn
