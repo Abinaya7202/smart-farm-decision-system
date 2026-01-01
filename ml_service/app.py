@@ -1,12 +1,9 @@
-
-
-# UPDATED FOR RENDER v1.0
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import joblib
-import urllib.request
+import gdown
 import os
 
 app = FastAPI()
@@ -23,26 +20,41 @@ app.add_middleware(
 )
 
 # ==================================================
-# 📌 GitHub Release Model Loader (Lazy Loading)
+# 📌 Google Drive File IDs (your models)
 # ==================================================
-BASE_URL = "https://github.com/Abinaya7202/smart-farm-decision-system/releases/download/v1.0/"
+MODEL_FILES = {
+    "crop_model.pkl": "1AQV3pitp34I1U2d2NUtEASyAbnga5hyb",
+    "crop_price_model.pkl": "15sYYLxGv4dsO5c-TI3HEG6xjcA7Yx7FA",
+    "pest_cluster_model.pkl": "1773cjoJmsJdcaG4_mPPcetEEgJCuqMfP",
+    "pest_risk_model.pkl": "1JYGtfXlvTw8Edn2lQYbdm7dIm_GQOlKf",
+    "risk_scaler.pkl": "1vf6Tiqwc4g5ljkhKvkm8Y7jhoR9er3vQ"
+}
 
-models = {}
+# Hold loaded models in memory
+models_cache = {}
 
+# ==================================================
+# 📌 Lazy Model Loader
+# ==================================================
 def get_model(filename):
-    """Lazy download + load"""
-    if filename not in models:
-        url = BASE_URL + filename
-        if not os.path.exists(filename):
-            print(f"📥 Downloading {filename} ...")
-            urllib.request.urlretrieve(url, filename)
-        print(f"✅ Loading {filename}")
-        models[filename] = joblib.load(filename)
-    return models[filename]
+    file_id = MODEL_FILES[filename]
+
+    # Download if not available locally
+    if not os.path.exists(filename):
+        print(f"📥 Downloading {filename}...")
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        gdown.download(url, filename, quiet=False)
+
+    # Cache in memory
+    if filename not in models_cache:
+        print(f"🔄 Loading {filename} into memory...")
+        models_cache[filename] = joblib.load(filename)
+
+    return models_cache[filename]
 
 
 # ==================================================
-# 📌 Request Body Schemas
+# 📌 Request Schemas
 # ==================================================
 class PredictInput(BaseModel):
     area: float
@@ -68,11 +80,11 @@ class PestInput(BaseModel):
 
 
 # ==================================================
-# 🌾 MODULE 1: Crop Yield Prediction
+# 🌾 1️⃣ Crop Yield Prediction
 # ==================================================
 @app.post("/predict")
 def predict(data: PredictInput):
-    yield_model = get_model("crop_model.pkl")
+    model = get_model("crop_model.pkl")
 
     df = pd.DataFrame([{
         "Area": data.area,
@@ -85,15 +97,15 @@ def predict(data: PredictInput):
         "Season": data.season
     }])
 
-    prediction = yield_model.predict(df)[0]
+    pred = model.predict(df)[0]
     return {
-        "predicted_yield": round(float(prediction), 2),
-        "total_production": round(float(prediction * data.area), 2)
+        "predicted_yield": round(float(pred), 2),
+        "total_production": round(float(pred * data.area), 2)
     }
 
 
 # ==================================================
-# 💰 MODULE 2: Price Prediction
+# 💰 2️⃣ Price Prediction
 # ==================================================
 @app.post("/predict-price")
 def predict_price(data: PriceInput):
@@ -109,24 +121,26 @@ def predict_price(data: PriceInput):
     price = model.predict(df)[0]
     return {
         "predicted_price": round(float(price), 2),
-        "unit": "₹ per ton"
+        "unit": "₹ per ton",
+        "message": "Based on historical price trends."
     }
 
 
 # ==================================================
-# 🐛 MODULE 3: Pest Risk Detection
+# 🐛 3️⃣ Pest Risk Detection
 # ==================================================
 @app.post("/pest-risk")
 def pest_risk(data: PestInput):
     scaler = get_model("risk_scaler.pkl")
-    pest_model = get_model("pest_risk_model.pkl")
+    model = get_model("pest_risk_model.pkl")
 
-    season_temp = {"Kharif": 32, "Rabi": 22, "Zaid": 38}
-    temp = season_temp.get(data.season, 30)
+    temp_map = {"Kharif": 32, "Rabi": 22, "Zaid": 38}
+    temp = temp_map.get(data.season, 30)
 
-    base = 0.5 + (0.2 if temp >= 35 else 0) + (0.2 if data.rainfall < 300 else 0)
-    if data.crop in ["Cotton", "Brinjal", "Chilli", "Tomato"]:
-        base += 0.1
+    base = 0.5
+    if temp >= 35: base += 0.2
+    if data.rainfall < 300: base += 0.2
+    if data.crop in ["Cotton", "Brinjal", "Chilli", "Tomato"]: base += 0.1
 
     scaled = scaler.transform([[base]])[0][0]
 
@@ -139,27 +153,26 @@ def pest_risk(data: PestInput):
         "Auto_Pest_Index": scaled
     }])
 
-    risk = pest_model.predict(df)[0]
-    label = {"Low":"🟢 Low", "Medium":"🟡 Medium", "High":"🔴 High"}[risk]
+    risk = model.predict(df)[0]
+    labels = {"Low": "🟢 Low", "Medium": "🟡 Medium", "High": "🔴 High"}
 
     return {
-        "ai_label": label,
-        "pest_risk": risk,
+        "risk_level": labels[risk],
         "temperature_used": temp,
         "scaled_index": round(float(scaled), 2)
     }
 
 
 # ==================================================
-# 🚦 Health Check Endpoint (Optional)
+# 🚦 Health Check
 # ==================================================
 @app.get("/")
 def home():
-    return {"message": "🚀 API running successfully!"}
+    return {"message": "🚀 API is running with Google Drive ML models!"}
 
 
 # ==================================================
-# 🚀 Run Server (Local)
+# LOCAL RUN
 # ==================================================
 if __name__ == "__main__":
     import uvicorn
