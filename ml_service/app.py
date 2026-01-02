@@ -37,7 +37,7 @@ def get_model(name):
         file_id = MODEL_IDS[name]
         url = DRIVE_BASE + file_id
 
-        if not os.path.exists(name):  # download only if missing
+        if not os.path.exists(name):
             print(f"📥 Downloading {name}...")
             urllib.request.urlretrieve(url, name)
 
@@ -78,7 +78,16 @@ def predict(data: PredictInput):
     model = get_model("crop_model.pkl")
 
     df = pd.DataFrame([data.dict()])
-    df.columns = ["Area", "Annual_Rainfall", "Fertilizer", "Pesticide", "Crop", "State", "Soil_type", "Season"]
+    df.columns = [
+        "Area",
+        "Annual_Rainfall",
+        "Fertilizer",
+        "Pesticide",
+        "Crop",
+        "State",
+        "Soil_type",
+        "Season",
+    ]
 
     result = model.predict(df)[0]
 
@@ -129,7 +138,7 @@ def pest_risk(data: PestInput):
     risk = model.predict(df)[0]
 
     return {
-        "risk_label": {"Low":"🟢 Low", "Medium":"🟡 Medium", "High":"🔴 High"}[risk],
+        "risk_label": {"Low": "🟢 Low", "Medium": "🟡 Medium", "High": "🔴 High"}[risk],
         "category": risk,
         "pest_index_scaled": float(scaled),
     }
@@ -140,6 +149,8 @@ def home():
     return {"message": "🚀 API Running with Google Drive Models!"}
 
 
+# ----- LOCAL RUN ONLY (Railway-safe) -----
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
