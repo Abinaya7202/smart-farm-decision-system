@@ -58,17 +58,30 @@ def clear_other_heavy_models(current_model):
 
 def get_model(name: str):
     try:
-        # Safety: unload other heavy model first
         if name in HEAVY_MODELS:
             clear_other_heavy_models(name)
+
+        # Remove corrupted or HTML files
+        if os.path.exists(name) and os.path.getsize(name) < 100_000:
+            print(f"🗑️ Removing corrupted {name}")
+            os.remove(name)
 
         if name not in loaded_models:
             file_id = MODEL_IDS[name]
             url = f"https://drive.google.com/uc?id={file_id}"
 
-            if not os.path.exists(name):
-                print(f"📥 Downloading {name} from Google Drive")
-                gdown.download(url, name, quiet=False)
+            print(f"📥 Downloading {name} from Google Drive")
+            gdown.download(
+                url,
+                name,
+                quiet=False,
+                fuzzy=True,
+                use_cookies=False
+            )
+
+            # Validate real model file
+            if not os.path.exists(name) or os.path.getsize(name) < 100_000:
+                raise Exception("Invalid model file downloaded")
 
             loaded_models[name] = joblib.load(name)
             print(f"✅ Loaded model: {name}")
