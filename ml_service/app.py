@@ -3,18 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import joblib
-import urllib.request
 import os
+import gdown
 import traceback
+import gc
 
-# ==========================
+# =========================
 # 🚀 FASTAPI APP
-# ==========================
+# =========================
 app = FastAPI(title="Smart Farm Decision Support API")
 
-# ==========================
+# =========================
 # 🌐 CORS
-# ==========================
+# =========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,11 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==========================
-# ☁️ GOOGLE DRIVE SETUP
-# ==========================
-DRIVE_BASE = "https://drive.google.com/uc?export=download&id="
-
+# =========================
+# ☁️ GOOGLE DRIVE MODEL IDS
+# =========================
 MODEL_IDS = {
     "crop_model.pkl": "1AQV3pitp34I1U2d2NUtEASyAbnga5hyb",
     "crop_price_model.pkl": "15sYYLxGv4dsO5c-TI3HEG6xjcA7Yx7FA",
@@ -35,20 +34,44 @@ MODEL_IDS = {
     "risk_scaler.pkl": "1vf6Tiqwc4g5ljkhKvkm8Y7jhoR9er3vQ",
 }
 
+# =========================
+# 🧠 MODEL CACHE (IMPORTANT)
+# =========================
 loaded_models = {}
+
+# Heavy models that must NEVER be in memory together
+HEAVY_MODELS = {
+    "crop_model.pkl",
+    "crop_price_model.pkl"
+}
+
+def clear_other_heavy_models(current_model):
+    """
+    Remove other heavy models from memory
+    to avoid Railway OOM crash.
+    """
+    for name in list(loaded_models.keys()):
+        if name != current_model and name in HEAVY_MODELS:
+            print(f"🧹 Unloading {name} from memory")
+            del loaded_models[name]
+            gc.collect()
 
 def get_model(name: str):
     try:
+        # Safety: unload other heavy model first
+        if name in HEAVY_MODELS:
+            clear_other_heavy_models(name)
+
         if name not in loaded_models:
             file_id = MODEL_IDS[name]
-            url = DRIVE_BASE + file_id
+            url = f"https://drive.google.com/uc?id={file_id}"
 
             if not os.path.exists(name):
-                print(f"📥 Downloading {name}")
-                urllib.request.urlretrieve(url, name)
+                print(f"📥 Downloading {name} from Google Drive")
+                gdown.download(url, name, quiet=False)
 
             loaded_models[name] = joblib.load(name)
-            print(f"✅ Loaded {name}")
+            print(f"✅ Loaded model: {name}")
 
         return loaded_models[name]
 
@@ -57,20 +80,18 @@ def get_model(name: str):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Model loading failed")
 
-
-# ==========================
+# =========================
 # 📥 INPUT SCHEMAS
-# ==========================
+# =========================
 class PredictInput(BaseModel):
-    area: float
+    state: str
+    crop: str
+    season: str
     rainfall: float
+    area: float
     fertilizer: float
     pesticide: float
-    crop: str
-    state: str
     soil_type: str
-    season: str
-
 
 class PriceInput(BaseModel):
     state: str
@@ -78,140 +99,112 @@ class PriceInput(BaseModel):
     season: str
     rainfall: float
 
-
 class PestInput(BaseModel):
     state: str
     crop: str
     season: str
     rainfall: float
 
-
-# ==========================
+# =========================
 # 🌾 CROP YIELD PREDICTION
-# ==========================
+# =========================
 @app.post("/predict")
 def predict_crop_yield(data: PredictInput):
-    try:
-        model = get_model("crop_model.pkl")
+    model = get_model("crop_model.pkl")
 
-        # EXACT FEATURES USED DURING TRAINING
-        df = pd.DataFrame([{
-            "State": data.state,
-            "Crop Type": data.crop,
-            "Season": data.season,
-            "Rainfall (mm)": data.rainfall
-        }])
+    df = pd.DataFrame([{
+        "State": data.state,
+        "Crop Type": data.crop,
+        "Season": data.season,
+        "Rainfall (mm)": data.rainfall
+    }])
 
-        prediction = model.predict(df)[0]
+    result = model.predict(df)[0]
 
-        return {
-            "predicted_yield": float(prediction),
-            "estimated_total_production": float(prediction * data.area)
-        }
+    return {
+        "predicted_yield": float(result),
+        "estimated_total_production": float(result * data.area)
+    }
 
-    except Exception as e:
-        print("❌ PREDICT ERROR:", e)
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==========================
+# =========================
 # 💰 PRICE PREDICTION
-# ==========================
+# =========================
 @app.post("/predict-price")
 def predict_price(data: PriceInput):
-    try:
-        model = get_model("crop_price_model.pkl")
+    model = get_model("crop_price_model.pkl")
 
-        df = pd.DataFrame([{
-            "State": data.state,
-            "Crop Type": data.crop,
-            "Season": data.season,
-            "Rainfall (mm)": data.rainfall
-        }])
+    df = pd.DataFrame([{
+        "State": data.state,
+        "Crop Type": data.crop,
+        "Season": data.season,
+        "Rainfall (mm)": data.rainfall
+    }])
 
-        price = model.predict(df)[0]
+    price = model.predict(df)[0]
 
-        return {
-            "predicted_price": float(price),
-            "unit": "₹ per ton"
-        }
+    return {
+        "predicted_price": float(price),
+        "unit": "₹ per ton"
+    }
 
-    except Exception as e:
-        print("❌ PRICE ERROR:", e)
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==========================
+# =========================
 # 🐛 PEST RISK PREDICTION
-# ==========================
+# =========================
 @app.post("/pest-risk")
 def pest_risk(data: PestInput):
-    try:
-        scaler = get_model("risk_scaler.pkl")
-        model = get_model("pest_risk_model.pkl")
+    scaler = get_model("risk_scaler.pkl")
+    model = get_model("pest_risk_model.pkl")
 
-        season_temp = {
-            "Kharif": 32,
-            "Rabi": 22,
-            "Zaid": 38
-        }
+    season_temp = {
+        "Kharif": 32,
+        "Rabi": 22,
+        "Zaid": 38
+    }
+    temperature = season_temp.get(data.season, 30)
 
-        temperature = season_temp.get(data.season, 30)
+    pest_index = 0.5
+    if temperature >= 35:
+        pest_index += 0.2
+    if data.rainfall < 300:
+        pest_index += 0.2
+    if data.crop in ["Cotton", "Brinjal", "Chilli", "Tomato"]:
+        pest_index += 0.1
 
-        # AUTO PEST INDEX (same logic as training)
-        pest_index = 0.5
-        if temperature >= 35:
-            pest_index += 0.2
-        if data.rainfall < 300:
-            pest_index += 0.2
-        if data.crop in ["Cotton", "Brinjal", "Chilli", "Tomato"]:
-            pest_index += 0.1
+    pest_index = max(0, min(1, pest_index))
+    scaled_index = scaler.transform([[pest_index]])[0][0]
 
-        pest_index = min(max(pest_index, 0), 1)
+    df = pd.DataFrame([{
+        "State": data.state,
+        "Crop Type": data.crop,
+        "Season": data.season,
+        "Temperature (°C)": temperature,
+        "Rainfall (mm)": data.rainfall,
+        "Auto_Pest_Index": scaled_index
+    }])
 
-        scaled_index = scaler.transform([[pest_index]])[0][0]
+    risk = model.predict(df)[0]
 
-        df = pd.DataFrame([{
-            "State": data.state,
-            "Crop Type": data.crop,
-            "Season": data.season,
-            "Temperature (°C)": temperature,
-            "Rainfall (mm)": data.rainfall,
-            "Auto_Pest_Index": scaled_index
-        }])
+    return {
+        "risk_label": {
+            "Low": "🟢 Low",
+            "Medium": "🟡 Medium",
+            "High": "🔴 High"
+        }[risk],
+        "category": risk,
+        "pest_index_scaled": float(scaled_index)
+    }
 
-        risk = model.predict(df)[0]
-
-        return {
-            "risk_label": {
-                "Low": "🟢 Low",
-                "Medium": "🟡 Medium",
-                "High": "🔴 High"
-            }[risk],
-            "category": risk,
-            "pest_index_scaled": float(scaled_index)
-        }
-
-    except Exception as e:
-        print("❌ PEST ERROR:", e)
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==========================
+# =========================
 # 🏠 HEALTH CHECK
-# ==========================
+# =========================
 @app.get("/")
 def home():
     return {"message": "🚀 Smart Farm API Running Successfully"}
 
-
-# ==========================
-# ▶ LOCAL RUN (Railway-safe)
-# ==========================
+# =========================
+# ▶ LOCAL RUN (Railway Safe)
+# =========================
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8080))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
